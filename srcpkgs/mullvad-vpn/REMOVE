@@ -1,0 +1,32 @@
+# REMOVE for mullvad-vpn
+case "${ACTION}" in
+pre)
+	if [ "${UPDATE}" != yes ]; then
+		pkill -2 -x mullvad-gui 2>/dev/null || true
+		sleep 0.5
+		pkill -9 -x mullvad-gui 2>/dev/null || true
+
+		sv down mullvad-daemon >/dev/null 2>&1 || true
+
+		/opt/MullvadVPN/resources/mullvad-setup reset-firewall || \
+			echo "Failed to reset the firewall"
+		/opt/MullvadVPN/resources/mullvad-setup remove-device || \
+			echo "Failed to remove this device from the Mullvad account"
+	fi
+	;;
+post)
+	if [ "${UPDATE}" != yes ]; then
+		[ -L /var/service/mullvad-daemon ] && rm -f /var/service/mullvad-daemon
+		[ -d /etc/sv/mullvad-daemon ] && rm -rf /etc/sv/mullvad-daemon
+
+		rm -rf /var/log/mullvad-vpn
+		rm -rf /var/cache/mullvad-vpn
+		rm -rf /etc/mullvad-vpn
+
+		if [ -x /usr/bin/apparmor_parser ]; then
+			apparmor_parser -R /etc/apparmor.d/mullvad >/dev/null 2>&1 && \
+				rm -f /etc/apparmor.d/mullvad
+		fi
+	fi
+	;;
+esac

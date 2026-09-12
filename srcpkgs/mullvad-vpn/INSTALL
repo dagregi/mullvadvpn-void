@@ -1,0 +1,23 @@
+# INSTALL for mullvad-vpn
+case "${ACTION}" in
+pre)
+	if [ "${UPDATE}" != yes ]; then
+		rm -f /var/cache/mullvad-vpn/relays.json
+		rm -f /var/cache/mullvad-vpn/api-ip-address.txt
+	fi
+	;;
+post)
+	if [ "${UPDATE}" != yes ]; then
+		ln -sf /etc/sv/mullvad-daemon /var/service/
+	fi
+	sv up mullvad-daemon >/dev/null 2>&1 || \
+		echo "Could not start mullvad-daemon, start it manually with: sv up mullvad-daemon"
+
+	if [ -x /usr/bin/apparmor_parser ]; then
+		echo "Installing the mullvad-vpn apparmor profile"
+		cp "/opt/MullvadVPN/resources/apparmor_mullvad" /etc/apparmor.d/mullvad
+		apparmor_parser -r /etc/apparmor.d/mullvad || \
+			echo "Failed to load the mullvad apparmor profile"
+	fi
+	;;
+esac

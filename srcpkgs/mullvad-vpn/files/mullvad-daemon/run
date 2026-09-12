@@ -1,0 +1,11 @@
+#!/bin/sh
+exec 2>&1
+export MULLVAD_RESOURCE_DIR="/opt/MullvadVPN/resources/"
+
+# Upstream's mullvad-early-boot-blocking.service runs this one-shot before
+# mullvad-daemon.service starts, so the firewall blocks all traffic before
+# the daemon takes over. Do the same thing here, synchronously, before
+# handing off to the real daemon.
+/usr/bin/mullvad-daemon -v --initialize-early-boot-firewall
+
+exec /usr/bin/mullvad-daemon -v --disable-stdout-timestamps

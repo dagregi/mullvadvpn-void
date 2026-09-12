@@ -1,0 +1,75 @@
+# Template file for 'mullvad-vpn'
+pkgname=mullvad-vpn
+version=2026.4
+revision=1
+archs="x86_64 aarch64"
+hostmakedepends="tar xz"
+depends="xdg-utils"
+short_desc="VPN client for the Mullvad VPN service"
+maintainer="dagregi <dagmawi.m@proton.me>"
+license="GPL-3.0-or-later"
+homepage="https://mullvad.net/"
+changelog="https://raw.githubusercontent.com/mullvad/mullvadvpn-app/${version}/CHANGELOG.md"
+nostrip=yes
+nopie=yes
+noshlibprovides=yes
+make_dirs="/var/log/mullvad-vpn 0750 root root
+ /var/cache/mullvad-vpn 0750 root root
+ /etc/mullvad-vpn 0750 root root"
+
+case "${XBPS_TARGET_MACHINE}" in
+	x86_64*)
+		_deb_arch=amd64
+		_deb_checksum=f1d758079e1dc90fff0c8d48256599b717e1de9879682c861a6776851c59453b
+		;;
+	aarch64*)
+		_deb_arch=arm64
+		_deb_checksum=39d897f425f77c3fe49902cf2f3d58a02c812d482a22f95dfc069526f58e1d09
+		;;
+esac
+
+distfiles="https://github.com/mullvad/mullvadvpn-app/releases/download/${version}/MullvadVPN-${version}_${_deb_arch}.deb
+ https://raw.githubusercontent.com/mullvad/mullvadvpn-app/${version}/LICENSE.md>mullvadvpn-app-LICENSE-${version}.md"
+checksum="${_deb_checksum}
+ 8951bda6e616df7418ff3f80d9699f96da704df64f3bc9f0d5bb75a103680456"
+
+do_extract() {
+	ar x "${XBPS_SRCDISTDIR}/${pkgname}-${version}/MullvadVPN-${version}_${_deb_arch}.deb"
+	tar xf data.tar.xz -C "${wrksrc}"
+
+	mv "${wrksrc}/opt/Mullvad VPN" "${wrksrc}/opt/MullvadVPN"
+
+	cp "${XBPS_SRCDISTDIR}/${pkgname}-${version}/mullvadvpn-app-LICENSE-${version}.md" \
+		"${wrksrc}/LICENSE.md"
+}
+
+do_install() {
+	vmkdir opt
+	vmkdir usr/bin
+	vmkdir usr/share/applications
+	vmkdir usr/share/doc
+	vmkdir usr/share/icons
+
+	vcopy opt/MullvadVPN opt
+	ln -s MullvadVPN "${DESTDIR}/opt/Mullvad VPN"
+
+	vcopy usr/bin/mullvad usr/bin
+	vcopy usr/bin/mullvad-daemon usr/bin
+	vcopy usr/bin/mullvad-exclude usr/bin
+	vcopy usr/bin/mullvad-problem-report usr/bin
+	chmod 4755 "${DESTDIR}/usr/bin/mullvad-exclude"
+
+	vcopy usr/share/applications/mullvad-vpn.desktop usr/share/applications
+	vcopy usr/share/icons/hicolor usr/share/icons
+	vcopy usr/share/doc/mullvad-vpn usr/share/doc
+
+	vcompletion usr/share/bash-completion/completions/mullvad bash mullvad
+	vcompletion usr/local/share/zsh/site-functions/_mullvad zsh mullvad
+	vcompletion usr/share/fish/vendor_completions.d/mullvad.fish fish mullvad
+
+	vcopy usr/lib/systemd/system usr/lib/systemd
+
+	vlicense LICENSE.md
+
+	vsv mullvad-daemon
+}
