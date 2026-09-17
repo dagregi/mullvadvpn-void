@@ -1,0 +1,117 @@
+name: Update mullvad-vpn template
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-mullvad-vpn-template
+  cancel-in-progress: false
+
+env:
+  TEMPLATE: srcpkgs/mullvad-vpn/template
+
+jobs:
+  update-template:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Fetch Latest Stable Desktop Release
+        id: get_release
+        run: |
+          RELEASES=$(curl -s https://api.github.com/repos/mullvad/mullvadvpn-app/releases?per_page=50)
+
+          VERSION=$(echo "$RELEASES" | jq -r '
+            [.[] | select(.draft == false and .prerelease == false)
+                 | select(.tag_name | test("^[0-9]{4}\\.[0-9]+$"))]
+            | sort_by(.published_at) | last | .tag_name // empty
+          ')
+
+          if [ -z "$VERSION" ]; then
+            echo "No stable desktop release found"
+            exit 0
+          fi
+
+          DEB_URL_AMD64=$(echo "$RELEASES" | jq -r --arg v "$VERSION" '
+            [.[] | select(.tag_name == $v)][0].assets[]
+            | select(.name | test("_amd64\\.deb$")) | .browser_download_url
+          ')
+          DEB_URL_ARM64=$(echo "$RELEASES" | jq -r --arg v "$VERSION" '
+            [.[] | select(.tag_name == $v)][0].assets[]
+            | select(.name | test("_arm64\\.deb$")) | .browser_download_url
+          ')
+
+          if [ -z "$DEB_URL_AMD64" ] || [ -z "$DEB_URL_ARM64" ]; then
+            echo "Missing amd64/arm64 .deb assets for $VERSION"
+            exit 0
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "deb_url_amd64=$DEB_URL_AMD64" >> "$GITHUB_OUTPUT"
+          echo "deb_url_arm64=$DEB_URL_ARM64" >> "$GITHUB_OUTPUT"
+
+      - name: Read Current Version
+        if: steps.get_release.outputs.version
+        id: check_version
+        run: |
+          CURRENT_VERSION=$(grep '^version=' "$TEMPLATE" | cut -d= -f2)
+          echo "current_version=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download and Checksum
+        if: steps.get_release.outputs.version && steps.get_release.outputs.version != steps.check_version.outputs.current_version
+        id: download
+        run: |
+          VERSION="${{ steps.get_release.outputs.version }}"
+
+          curl -Lo mullvad-amd64.deb "${{ steps.get_release.outputs.deb_url_amd64 }}"
+          curl -Lo mullvad-arm64.deb "${{ steps.get_release.outputs.deb_url_arm64 }}"
+          curl -Lo LICENSE.md "https://raw.githubusercontent.com/mullvad/mullvadvpn-app/${VERSION}/LICENSE.md"
+
+          echo "sha256_amd64=$(sha256sum mullvad-amd64.deb | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "sha256_arm64=$(sha256sum mullvad-arm64.deb | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "sha256_license=$(sha256sum LICENSE.md | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Update Template
+        if: steps.get_release.outputs.version && steps.get_release.outputs.version != steps.check_version.outputs.current_version
+        run: |
+          VERSION="${{ steps.get_release.outputs.version }}"
+          SHA256_AMD64="${{ steps.download.outputs.sha256_amd64 }}"
+          SHA256_ARM64="${{ steps.download.outputs.sha256_arm64 }}"
+          SHA256_LICENSE="${{ steps.download.outputs.sha256_license }}"
+
+          awk -v version="$VERSION" -v amd64="$SHA256_AMD64" -v arm64="$SHA256_ARM64" -v lic="$SHA256_LICENSE" '
+            BEGIN { in_case = 0; arch = ""; past_case = 0 }
+            /^version=/ { print "version=" version; next }
+            /^revision=/ { print "revision=1"; next }
+            /^case "\$\{XBPS_TARGET_MACHINE\}" in$/ { in_case = 1; print; next }
+            in_case && /^esac$/ { in_case = 0; past_case = 1; print; next }
+            in_case && /x86_64\*\)/ { arch = "x86_64"; print; next }
+            in_case && /aarch64\*\)/ { arch = "aarch64"; print; next }
+            in_case && /^\t\t;;$/ { arch = ""; print; next }
+            in_case && arch == "x86_64" && /_deb_checksum=/ { print "\t\t_deb_checksum=" amd64; next }
+            in_case && arch == "aarch64" && /_deb_checksum=/ { print "\t\t_deb_checksum=" arm64; next }
+            past_case && /^ [0-9a-f]{64}"$/ { print " " lic "\""; next }
+            { print }
+          ' "$TEMPLATE" > "$TEMPLATE.new"
+
+          mv "$TEMPLATE.new" "$TEMPLATE"
+          bash -n "$TEMPLATE"
+
+      - name: Commit and Push
+        if: steps.get_release.outputs.version && steps.get_release.outputs.version != steps.check_version.outputs.current_version
+        run: |
+          VERSION="${{ steps.get_release.outputs.version }}"
+
+          git config user.name "dagregi"
+          git config user.email "dagmawi.m@proton.me"
+          git add "$TEMPLATE"
+          git commit -m "mullvad-vpn: update to v${VERSION} [auto]"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push
