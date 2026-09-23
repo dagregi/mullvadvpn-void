@@ -1,0 +1,103 @@
+name: build
+
+on:
+  push:
+    tags:
+      - '*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout mullvadvpn-void
+        uses: actions/checkout@v4
+
+      - name: create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/^version=//p' srcpkgs/mullvad-vpn/template)
+          : "${version:?version not found in template}"
+
+          gh release view "$TAG" >/dev/null 2>&1 && exit 0
+
+          gh release create "$TAG" \
+            --title "mullvad-vpn $TAG" \
+            --notes "https://github.com/mullvad/mullvadvpn-app/releases/tag/${version}" \
+            --latest=false
+
+  build:
+    needs: release
+    runs-on: ubuntu-22.04
+    strategy:
+      max-parallel: 2
+      matrix:
+        include:
+          - { host: x86_64, target: x86_64 }
+          - { host: x86_64, target: aarch64 }
+    steps:
+      - name: checkout mullvadvpn-void
+        uses: actions/checkout@v4
+        with:
+          path: mullvadvpn-void
+
+      - name: checkout void-packages
+        uses: actions/checkout@v4
+        with:
+          repository: void-linux/void-packages
+          path: void-packages
+
+      - name: copy mullvad-vpn into srcpkgs
+        run: cp -rv mullvadvpn-void/srcpkgs/mullvad-vpn void-packages/srcpkgs
+
+      - name: install xbps-static
+        run: |
+          mkdir -p /opt/xbps
+          curl -LO https://repo-default.voidlinux.org/static/xbps-static-latest.x86_64-musl.tar.xz
+          tar xf xbps-static-latest.x86_64-musl.tar.xz -C /opt/xbps
+          echo "/opt/xbps/usr/bin" >> "$GITHUB_PATH"
+
+      - name: build
+        working-directory: void-packages
+        run: |
+          if [ "${{ matrix.host }}" = "${{ matrix.target }}" ]; then
+            ./xbps-src -A ${{ matrix.host }} binary-bootstrap
+            ./xbps-src -A ${{ matrix.host }} pkg mullvad-vpn
+          else
+            ./xbps-src -a ${{ matrix.target }} -A ${{ matrix.host }} binary-bootstrap
+            ./xbps-src -a ${{ matrix.target }} -A ${{ matrix.host }} pkg mullvad-vpn
+          fi
+
+      - name: sign repodata
+        working-directory: void-packages/hostdir/binpkgs
+        env:
+          XBPS_PASSPHRASE: ${{ secrets.SIGN_PASS }}
+        run: |
+          xbps-rindex -a *.xbps
+          xbps-rindex -s --signedby "${{ vars.SIGNEDBY }}" \
+            --privkey <(printf '%s' "${{ secrets.PRIV_KEY }}") .
+          xbps-rindex -S --privkey <(printf '%s' "${{ secrets.PRIV_KEY }}") *.xbps
+
+      - name: upload assets
+        working-directory: void-packages/hostdir/binpkgs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          sha256sum -- *.xbps
+          gh release upload "${{ github.ref_name }}" *.xbps *.xbps.sig2 *-repodata *-repodata.sig2 --clobber
+
+  latest:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: mark release as latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release edit "${{ github.ref_name }}" --latest
