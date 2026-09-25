@@ -6,6 +6,29 @@ template, runit service, and install/remove hooks for running
 
 ## Installation
 
+### Using repo with auto updates
+
+Create the file `/etc/xbps.d/20-mullvad-vpn.conf` with the following content:
+
+```
+repository=https://github.com/dagregi/mullvadvpn-void/releases/latest/download/
+```
+
+Then, install with:
+
+```sh
+sudo xbps-install -Su mullvad-vpn
+```
+
+### Manual installation
+
+Download a release (`*.xbps`) then run:
+
+```sh
+xbps-rindex -a mullvad-vpn-<version>_<revision>.<arch>.xbps
+sudo xbps-install -R $PWD mullvad-vpn
+```
+
 ### Build with xbps-src
 
 ```sh
