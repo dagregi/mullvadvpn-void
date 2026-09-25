@@ -64,6 +64,8 @@ jobs:
 
       - name: build
         working-directory: void-packages
+        env:
+          XBPS_TARGET_ARCH: ${{ matrix.target }}
         run: |
           if [ "${{ matrix.host }}" = "${{ matrix.target }}" ]; then
             ./xbps-src -A ${{ matrix.host }} binary-bootstrap
@@ -77,6 +79,7 @@ jobs:
         working-directory: void-packages/hostdir/binpkgs
         env:
           XBPS_PASSPHRASE: ${{ secrets.SIGN_PASS }}
+          XBPS_TARGET_ARCH: ${{ matrix.target }}
         run: |
           xbps-rindex -a *.xbps
           xbps-rindex -s --signedby "${{ vars.SIGNEDBY }}" \
