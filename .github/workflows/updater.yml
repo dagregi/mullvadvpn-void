@@ -29,7 +29,9 @@ jobs:
       - name: Fetch Latest Stable Desktop Release
         id: get_release
         run: |
-          RELEASES=$(curl -s https://api.github.com/repos/mullvad/mullvadvpn-app/releases?per_page=50)
+          set -euo pipefail
+
+          RELEASES=$(curl -fsSL https://api.github.com/repos/mullvad/mullvadvpn-app/releases?per_page=50)
 
           VERSION=$(echo "$RELEASES" | jq -r '
             [.[] | select(.draft == false and .prerelease == false)
@@ -42,19 +44,16 @@ jobs:
             exit 0
           fi
 
-          DEB_URL_AMD64=$(echo "$RELEASES" | jq -r --arg v "$VERSION" '
-            [.[] | select(.tag_name == $v)][0].assets[]
-            | select(.name | test("_amd64\\.deb$")) | .browser_download_url
-          ')
-          DEB_URL_ARM64=$(echo "$RELEASES" | jq -r --arg v "$VERSION" '
-            [.[] | select(.tag_name == $v)][0].assets[]
-            | select(.name | test("_arm64\\.deb$")) | .browser_download_url
-          ')
+          BASE_URL="https://github.com/mullvad/mullvadvpn-app/releases/download/${VERSION}"
+          DEB_URL_AMD64="${BASE_URL}/MullvadVPN-${VERSION}_amd64.deb"
+          DEB_URL_ARM64="${BASE_URL}/MullvadVPN-${VERSION}_arm64.deb"
 
-          if [ -z "$DEB_URL_AMD64" ] || [ -z "$DEB_URL_ARM64" ]; then
-            echo "Missing amd64/arm64 .deb assets for $VERSION"
-            exit 0
-          fi
+          for url in "$DEB_URL_AMD64" "$DEB_URL_ARM64"; do
+            if ! curl -fsSIL -o /dev/null "$url"; then
+              echo "Missing .deb asset for $VERSION: $url"
+              exit 1
+            fi
+          done
 
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "deb_url_amd64=$DEB_URL_AMD64" >> "$GITHUB_OUTPUT"
@@ -70,24 +69,34 @@ jobs:
       - name: Download and Checksum
         if: steps.get_release.outputs.version && steps.get_release.outputs.version != steps.check_version.outputs.current_version
         id: download
+        env:
+          VERSION: ${{ steps.get_release.outputs.version }}
+          DEB_URL_AMD64: ${{ steps.get_release.outputs.deb_url_amd64 }}
+          DEB_URL_ARM64: ${{ steps.get_release.outputs.deb_url_arm64 }}
         run: |
-          VERSION="${{ steps.get_release.outputs.version }}"
+          set -euo pipefail
 
-          curl -Lo mullvad-amd64.deb "${{ steps.get_release.outputs.deb_url_amd64 }}"
-          curl -Lo mullvad-arm64.deb "${{ steps.get_release.outputs.deb_url_arm64 }}"
-          curl -Lo LICENSE.md "https://raw.githubusercontent.com/mullvad/mullvadvpn-app/${VERSION}/LICENSE.md"
+          curl -fLo mullvad-amd64.deb "$DEB_URL_AMD64"
+          curl -fLo mullvad-arm64.deb "$DEB_URL_ARM64"
+          curl -fLo LICENSE.md "https://raw.githubusercontent.com/mullvad/mullvadvpn-app/${VERSION}/LICENSE.md"
 
-          echo "sha256_amd64=$(sha256sum mullvad-amd64.deb | awk '{print $1}')" >> "$GITHUB_OUTPUT"
-          echo "sha256_arm64=$(sha256sum mullvad-arm64.deb | awk '{print $1}')" >> "$GITHUB_OUTPUT"
-          echo "sha256_license=$(sha256sum LICENSE.md | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          SHA256_AMD64=$(sha256sum mullvad-amd64.deb | awk '{print $1}')
+          SHA256_ARM64=$(sha256sum mullvad-arm64.deb | awk '{print $1}')
+          SHA256_LICENSE=$(sha256sum LICENSE.md | awk '{print $1}')
+
+          echo "sha256_amd64=$SHA256_AMD64" >> "$GITHUB_OUTPUT"
+          echo "sha256_arm64=$SHA256_ARM64" >> "$GITHUB_OUTPUT"
+          echo "sha256_license=$SHA256_LICENSE" >> "$GITHUB_OUTPUT"
 
       - name: Update Template
         if: steps.get_release.outputs.version && steps.get_release.outputs.version != steps.check_version.outputs.current_version
+        env:
+          VERSION: ${{ steps.get_release.outputs.version }}
+          SHA256_AMD64: ${{ steps.download.outputs.sha256_amd64 }}
+          SHA256_ARM64: ${{ steps.download.outputs.sha256_arm64 }}
+          SHA256_LICENSE: ${{ steps.download.outputs.sha256_license }}
         run: |
-          VERSION="${{ steps.get_release.outputs.version }}"
-          SHA256_AMD64="${{ steps.download.outputs.sha256_amd64 }}"
-          SHA256_ARM64="${{ steps.download.outputs.sha256_arm64 }}"
-          SHA256_LICENSE="${{ steps.download.outputs.sha256_license }}"
+          set -euo pipefail
 
           awk -v version="$VERSION" -v amd64="$SHA256_AMD64" -v arm64="$SHA256_ARM64" -v lic="$SHA256_LICENSE" '
             BEGIN { in_case = 0; arch = ""; past_case = 0 }
@@ -109,8 +118,10 @@ jobs:
 
       - name: Commit and Push
         if: steps.get_release.outputs.version && steps.get_release.outputs.version != steps.check_version.outputs.current_version
+        env:
+          VERSION: ${{ steps.get_release.outputs.version }}
         run: |
-          VERSION="${{ steps.get_release.outputs.version }}"
+          set -euo pipefail
 
           git config user.name "dagregi"
           git config user.email "dagmawi.m@proton.me"
@@ -121,7 +132,10 @@ jobs:
 
       - name: Tag Release
         if: steps.get_release.outputs.version && steps.get_release.outputs.version != steps.check_version.outputs.current_version
+        env:
+          VERSION: ${{ steps.get_release.outputs.version }}
         run: |
-          VERSION="${{ steps.get_release.outputs.version }}"
+          set -euo pipefail
+
           git tag "$VERSION"
           git push origin "$VERSION"
